@@ -1,4 +1,8 @@
+-- SCRIPTED by H4XT3R12, AKA Domusthedev. In Discord
+
+
 --!nonstrict
+
 local players = game:GetService("Players")
 local rs = game:GetService("ReplicatedStorage")
 local debris = game:GetService("Debris")
