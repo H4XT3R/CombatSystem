@@ -1,20 +1,26 @@
 --[[
-	Handles server-authoritative melee requests. Clients request an attack or
-	block; they never choose a victim, damage amount, or hitbox position.
+	KATANA SYSTEM
+ 	
+	this script handles server-authoritative melee requests. the client request an attack or
+	block; they never choose a victim, damage amount, or hitbox position. It would be vulnerable to malicious exploiters
 
 	HitboxModule reports overlap candidates and clashes. This script checks
-	character state, distance, and walls before DamageModule applies damage.
+	character state, distance, and walls before DamageModule applies the damage.
 	Each swing owns its temporary movement and connections until cleanup.
 ]]
+
+--services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 local RunService = game:GetService("RunService")
 
+--Modules
 local combatModules = ReplicatedStorage.Shared.CombatModules
 local DamageModule = require(combatModules.DamageModule)
 local HitboxModule = require(combatModules.HitboxModule)
 
+--Easier variable name for you to read.
 local DAMAGE = 10
 local ATTACK_COOLDOWN = 0.5
 local HIT_DURATION = 0.2
@@ -27,11 +33,13 @@ local LUNGE_FORCE = 100000
 local REQUEST_LIMIT = 20
 local PARTICLE_COUNT = 20
 
+--Remotes
 local remotes = ReplicatedStorage.Remotes.RemoteEvents
 local attackEvent = remotes:WaitForChild("AttackDef")
 local blockEvent = remotes:WaitForChild("Block")
 local unblockEvent = remotes:WaitForChild("Unblock")
 
+-Assets
 local assets = ReplicatedStorage.Assets
 local combatEffects = assets.VFX.CombatVfx
 local combatSounds = assets.Sounds.CombatSound
@@ -43,6 +51,7 @@ local parrySound = combatSounds.SwordParry:WaitForChild("Parry")
 local blockSound = combatSounds.SwordBlock:WaitForChild("SwordBlock")
 local reactionAnimation = assets.Animations.ReactAnim:WaitForChild("ReactAnim")
 
+--tables
 local cooldowns = {}
 local attacks = {}
 local requestWindows = {}
@@ -51,8 +60,8 @@ local random = Random.new()
 local deathConnections = {}
 local punchSounds = {}
 
--- These templates are fixed assets. Cache them once instead of allocating
--- and filtering a new sound list for every successful hit.
+--these templates are fixed assets. cache them once instead of allocating
+--and filtering a new sound list for every successful hit
 for _, sound in ipairs(combatSounds.PunchVariants:GetChildren()) do
 	if sound:IsA("Sound") then
 		table.insert(punchSounds, sound)
@@ -84,8 +93,8 @@ local function isDisabled(character: Model): boolean
 	return false
 end
 
--- The request limit protects validation work; the separate attack cooldown
--- controls gameplay. Block and attack requests share this server budget.
+--the request limit protects validation work, the separate attack cooldown
+--controls gameplay. block and attack requests share this server budget
 local function checkRate(player: Player): boolean
 	local now = os.clock()
 	local window = requestWindows[player]
@@ -119,8 +128,8 @@ local function playSound(template, parent)
 	if not template or not template:IsA("Sound") or not parent then
 		return
 	end
-	-- Each impact owns its sound so simultaneous hits do not restart a shared
-	-- template. Debris also removes sounds that never finish loading.
+	--each impact owns its sound so simultanoeous hits do not restart a shared
+	--template. debris also removes sounds that never finish loading
 	local sound = template:Clone()
 	sound.Looped = false
 	sound.Parent = parent
@@ -144,8 +153,8 @@ local function emitEffect(template, parent, count)
 	end
 	local effect = template:Clone()
 	effect.Parent = parent
-	-- Keep the clone alive until its longest particle lifetime has elapsed;
-	-- destroying it immediately after Emit would cut the visible effect short.
+	--keep the clone alive until its longest particle lifetime has elapse,
+	--destroying it immediately after emit would cut the visible effect short
 	local lifetime = 2
 	local function emit(emitter)
 		emitter.Enabled = false
@@ -201,8 +210,8 @@ local function playReaction(humanoid: Humanoid)
 	if not animator then
 		return
 	end
-	-- Loading can fail for an unavailable animation asset. Damage has already
-	-- been applied, so a cosmetic failure must not cancel the attack.
+	--the loading can fail for an unavailable animation asset or any other occasions. damage has already
+	-- been applied, so a cosmetic failure must not cancel the attack
 	local success, track = pcall(function()
 		return animator:LoadAnimation(reactionAnimation)
 	end)
@@ -220,8 +229,8 @@ end
 local function canHit(character: Model, target: Model, from: Vector3, to: Vector3)
 	local ray = RaycastParams.new()
 	ray.FilterType = Enum.RaycastFilterType.Exclude
-	-- The overlap module supplies candidates, not proof of an unobstructed
-	-- hit. Ignore characters and attack volumes while testing solid geometry.
+	--the overlap module supplies candidates, not a proof of an unknown
+	--hit. Ignore characters and attack volumes while testing solid geometry
 	local ignore = { character, target }
 	for _, data in pairs(attacks) do
 		if data.hitbox and data.hitbox.Part then
@@ -234,8 +243,8 @@ local function canHit(character: Model, target: Model, from: Vector3, to: Vector
 end
 
 --[[
-	Ends a swing on timeout, death, or setup failure. Clearing the registry
-	first makes repeated cleanup safe and prevents callbacks reusing it.
+	it ends a swing on timeout, death, or loading  failure. clearing the registry
+	first makes repeated cleanup safe and prevents callbacks reusing it
 ]]
 local function stopAttack(player)
 	local data = attacks[player]
@@ -266,7 +275,7 @@ local function startLunge(root: BasePart): Attachment?
 	attachment.Name = "M1Attachment"
 	attachment.Parent = root
 
-	-- Constrain only the ground plane so gravity and jumping still work.
+	--constrain only the ground so gravity and jumping can still work.
 	local lunge = Instance.new("LinearVelocity")
 	lunge.Name = "M1Lunge"
 	lunge.Attachment0 = attachment
@@ -308,8 +317,8 @@ local function startAttack(player: Player)
 	}
 	attacks[player] = data
 	local function onHit(target)
-		-- The module deduplicates overlaps; this guard also rejects callbacks
-		-- from a swing that was canceled by death or character replacement.
+		--the module deduplicat overlaps, this guard also declines and reject callbacks
+		--from a swing that was canceled by death or character replacement
 		if data.closed or data.hit[target] then
 			return
 		end
@@ -331,8 +340,8 @@ local function startAttack(player: Player)
 		end
 		data.hit[target] = true
 		local blocking = target:GetAttribute("Blocking") == true
-		-- DamageModule owns the one-third block multiplier and block callback.
-		-- Return afterward so a blocked hit does not also play blood/reactions.
+		--DamageModule owns the 1/3 block multiplier and block callback
+		--return afterward so a blocked hit does not also play blood or reactions
 		DamageModule.Deal(target, DAMAGE, onBlock)
 		if blocking then
 			return
@@ -343,8 +352,8 @@ local function startAttack(player: Player)
 		emitEffect(bloodEffect, targetRoot, PARTICLE_COUNT)
 	end
 
-	-- Hitbox construction can throw if its dependencies are misconfigured.
-	-- Roll back any partial lunge or connection instead of leaking the swing.
+	--hitbox construction can throw if its dependencies are misconfigured.
+	--Roll back any partial lunge or connection instead of leaking the swing
 	local success, message = xpcall(function()
 		data.lunge = startLunge(root)
 		data.hitbox = HitboxModule.new(root.CFrame * HITBOX_OFFSET, character, {
@@ -369,7 +378,7 @@ local function startAttack(player: Player)
 		return
 	end
 	task.delay(HIT_DURATION, function()
-		-- An old timeout must not destroy a newer swing after a respawn.
+		-- An old timeout must not destroy a newer swing after a respawn
 		if attacks[player] == data then
 			stopAttack(player)
 		end
@@ -398,8 +407,8 @@ local function setupPlayer(player: Player)
 		if deathConnections[player] then
 			deathConnections[player]:Disconnect()
 		end
-		-- Character assembly may yield. Recheck ownership afterward because
-		-- the player can leave or respawn while the Humanoid is being created.
+		--Character assembly may yield. Recheck ownership afterward because
+		--the player can leave or respawn while the Humanoid is being created.
 		local humanoid = character:WaitForChild("Humanoid", 10)
 		if not humanoid or not humanoid:IsA("Humanoid") then
 			return
@@ -441,8 +450,8 @@ blockEvent.OnServerEvent:Connect(function(player)
 	end
 	setBlocking(character, true)
 end)
--- Releasing block bypasses the rate limit so throttling cannot leave a
--- player stuck blocking. It only clears state belonging to that player.
+--releasing block bypasses the rate limit so throttling cannot leave a
+--player stuck blocking. It only clears state belonging to that player.
 unblockEvent.OnServerEvent:Connect(function(player)
 	local character = player.Character
 	if character and character:GetAttribute("Blocking") then
