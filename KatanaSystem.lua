@@ -1,7 +1,6 @@
 -- SCRIPTED by H4XT3R12, AKA Domusthedev. In Discord
 
 
---!nonstrict
 
 local players = game:GetService("Players")
 local rs = game:GetService("ReplicatedStorage")
@@ -11,9 +10,9 @@ local shared = rs:WaitForChild("Shared")
 local loader = require(shared.Utilities:WaitForChild("ModuleLoader"))
 local mods = loader.Load(shared:WaitForChild("CombatModules"))
 local remotes = rs.Remotes.RemoteEvents
-local atk = remotes:WaitForChild("AttackDef")
-local blk = remotes:WaitForChild("Block")
-local unblk = remotes:WaitForChild("Unblock")
+local attackEvent = remotes:WaitForChild("AttackDef")
+local blockEvent = remotes:WaitForChild("Block")
+local unblockEvent = remotes:WaitForChild("Unblock")
 local assets = rs.Assets
 local vfx = assets.VFX.CombatVfx
 local sfx = assets.Sounds.CombatSound
@@ -24,10 +23,10 @@ local lightfx = assets.VFX:WaitForChild("ClashLight")
 local parry = sfx.SwordParry:WaitForChild("Parry")
 local blockfx = sfx.SwordBlock:WaitForChild("SwordBlock")
 local anim = assets.Animations.ReactAnim:WaitForChild("ReactAnim")
-local dmg = mods.DamageModule
-local hb = mods.HitboxModule
+local damageMod = mods.DamageModule
+local hitbox = mods.HitboxModule
 local damage = 10
-local delay = 0.5
+local cooldown = 0.5
 local duration = 0.2
 local size = Vector3.new(8, 5, 8)
 local offset = CFrame.new(0, 0, -4)
@@ -37,27 +36,35 @@ local attacks = {}
 local rates = {}
 local links = {}
 local rng = Random.new()
+local deaths = {}
+local punches = {}
 
-local function getChar(c)
-  if not c or not c:IsDescendantOf(workspace) then
-    return nil
+for _, sound in sfx:WaitForChild("PunchVariants"):GetChildren() do
+  if sound:IsA("Sound") then
+    table.insert(punches, sound)
   end
-  local h = c:FindFirstChildOfClass("Humanoid")
-  local p = c:FindFirstChild("HumanoidRootPart")
-  if not h or h.Health <= 0 then
-    return nil
-  end
-  if not p or not p:IsA("BasePart") then
-    return nil
-  end
-  return h, p
 end
 
-local function isStunned(c)
-  if c:GetAttribute("Stunned") == true then
+local function getChar(char)
+  if not char or not char:IsDescendantOf(workspace) then
+    return nil
+  end
+  local hum = char:FindFirstChildOfClass("Humanoid")
+  local root = char:FindFirstChild("HumanoidRootPart")
+  if not hum or hum.Health <= 0 then
+    return nil
+  end
+  if not root or not root:IsA("BasePart") then
+    return nil
+  end
+  return hum, root
+end
+
+local function isStunned(char)
+  if char:GetAttribute("Stunned") == true then
     return true
   end
-  if c:GetAttribute("Ragdolled") == true then
+  if char:GetAttribute("Ragdolled") == true then
     return true
   end
   return false
@@ -65,27 +72,27 @@ end
 
 local function checkRate(plr)
   local now = os.clock()
-  local w = rates[plr]
-  if not w or now - w.started >= 1 then
-    w = {started = now, count = 0}
-    rates[plr] = w
+  local window = rates[plr]
+  if not window or now - window.started >= 1 then
+    window = {started = now, count = 0}
+    rates[plr] = window
   end
-  w.count += 1
-  return w.count <= 20
+  window.count += 1
+  return window.count <= 20
 end
 
-local function setBlock(c, enabled)
-  c:SetAttribute("Blocking", enabled)
-  local hl = c:FindFirstChild("CombatBlockHighlight")
+local function setBlock(char, enabled)
+  char:SetAttribute("Blocking", enabled)
+  local hl = char:FindFirstChild("CombatBlockHighlight")
   if not hl and enabled then
     hl = Instance.new("Highlight")
     hl.Name = "CombatBlockHighlight"
-    hl.Adornee = c
+    hl.Adornee = char
     hl.FillTransparency = 0.4
     hl.FillColor = Color3.new(1, 1, 1)
     hl.OutlineTransparency = 1
     hl.DepthMode = Enum.HighlightDepthMode.Occluded
-    hl.Parent = c
+    hl.Parent = char
   end
   if hl and hl:IsA("Highlight") then
     hl.Enabled = enabled
@@ -96,31 +103,21 @@ local function playSound(src, obj)
   if not src or not src:IsA("Sound") or not obj then
     return
   end
-  local s = src:Clone()
-  s.Looped = false
-  s.Parent = obj
-  debris:AddItem(s, math.clamp(s.TimeLength + 1, 2, 10))
-  s.Ended:Once(function()
-    s:Destroy()
+  local sound = src:Clone()
+  sound.Looped = false
+  sound.Parent = obj
+  debris:AddItem(sound, math.clamp(sound.TimeLength + 1, 2, 10))
+  sound.Ended:Once(function()
+    sound:Destroy()
   end)
-  s:Play()
+  sound:Play()
 end
 
-local function playPunch(p)
-  local f = sfx:FindFirstChild("PunchVariants")
-  if not f then
+local function playPunch(root)
+  if #punches == 0 then
     return
   end
-  local list = {}
-  for i, v in ipairs(f:GetChildren()) do
-    if v:IsA("Sound") then
-      table.insert(list, v)
-    end
-  end
-  if #list == 0 then
-    return
-  end
-  playSound(list[rng:NextInteger(1, #list)], p)
+  playSound(punches[rng:NextInteger(1, #punches)], root)
 end
 
 local function emitFx(src, obj, count)
@@ -146,46 +143,46 @@ local function emitFx(src, obj, count)
   debris:AddItem(fx, life)
 end
 
-local function flashLight(p)
-  local l = lightfx:Clone()
-  l.Parent = p
-  if l:IsA("Light") then
-    l.Enabled = true
+local function flashLight(root)
+  local light = lightfx:Clone()
+  light.Parent = root
+  if light:IsA("Light") then
+    light.Enabled = true
   end
-  debris:AddItem(l, 0.2)
+  debris:AddItem(light, 0.2)
 end
 
-local function swordFx(c, s)
-  local h, p = getChar(c)
-  if not h then
+local function swordFx(char, sound)
+  local hum, root = getChar(char)
+  if not hum then
     return
   end
-  local tool = c:FindFirstChild("Katana")
+  local tool = char:FindFirstChild("Katana")
   local grip = tool and tool:FindFirstChild("Handle")
-  local obj = grip and grip:IsA("BasePart") and grip or p
-  playSound(s, p)
+  local obj = grip and grip:IsA("BasePart") and grip or root
+  playSound(sound, root)
   emitFx(sparks, obj, 20)
-  flashLight(p)
+  flashLight(root)
 end
 
-local function onBlock(c)
-  swordFx(c, blockfx)
+local function onBlock(char)
+  swordFx(char, blockfx)
 end
 
-local function onClash(c)
-  if not c:FindFirstChild("Katana") then
+local function onClash(char)
+  if not char:FindFirstChild("Katana") then
     return
   end
-  swordFx(c, parry)
+  swordFx(char, parry)
 end
 
-local function react(h)
-  local a = h:FindFirstChildOfClass("Animator")
-  if not a then
+local function react(hum)
+  local animator = hum:FindFirstChildOfClass("Animator")
+  if not animator then
     return
   end
   local ok, track = pcall(function()
-    return a:LoadAnimation(anim)
+    return animator:LoadAnimation(anim)
   end)
   if not ok then
     return
@@ -198,10 +195,10 @@ local function react(h)
   track:Play()
 end
 
-local function canHit(c, t, from, to)
+local function canHit(char, target, from, to)
   local ray = RaycastParams.new()
   ray.FilterType = Enum.RaycastFilterType.Exclude
-  local ignore = {c, t}
+  local ignore = {char, target}
   for i, data in pairs(attacks) do
     if data.hitbox and data.hitbox.Part then
       table.insert(ignore, data.hitbox.Part)
@@ -230,86 +227,98 @@ local function stopAttack(plr)
   end
 end
 
-local function startLunge(p)
-  local look = p.CFrame.LookVector
+local function startLunge(root)
+  local look = root.CFrame.LookVector
   local dir = Vector3.new(look.X, 0, look.Z)
   if dir.Magnitude < 0.001 then
     return nil
   end
-  local lunge = Instance.new("BodyVelocity")
+
+  local attachment = Instance.new("Attachment")
+  attachment.Name = "M1Attachment"
+  attachment.Parent = root
+
+  -- Constrain only the ground plane so gravity and jumping still work.
+  local lunge = Instance.new("LinearVelocity")
   lunge.Name = "M1Lunge"
-  lunge.MaxForce = Vector3.new(100000, 0, 100000)
-  lunge.P = 12500
-  lunge.Velocity = dir.Unit * 14
-  lunge.Parent = p
-  debris:AddItem(lunge, 0.12)
-  return lunge
+  lunge.Attachment0 = attachment
+  lunge.RelativeTo = Enum.ActuatorRelativeTo.World
+  lunge.VelocityConstraintMode = Enum.VelocityConstraintMode.Plane
+  lunge.PrimaryTangentAxis = Vector3.xAxis
+  lunge.SecondaryTangentAxis = Vector3.zAxis
+  lunge.PlaneVelocity = Vector2.new(dir.Unit.X, dir.Unit.Z) * 14
+  lunge.ForceLimitsEnabled = true
+  lunge.ForceLimitMode = Enum.ForceLimitMode.PerAxis
+  lunge.MaxPlanarAxesForce = Vector2.new(100000, 100000)
+  lunge.Parent = attachment
+  debris:AddItem(attachment, 0.12)
+  return attachment
 end
 
 local function startAttack(plr)
   if not checkRate(plr) then
     return
   end
-  local c = plr.Character
-  local h, p = getChar(c)
-  if not h or p.Anchored or isStunned(c) then
+  local char = plr.Character
+  local hum, root = getChar(char)
+  if not hum or root.Anchored or isStunned(char) then
     return
   end
-  if c:GetAttribute("Blocking") then
+  if char:GetAttribute("Blocking") then
     return
   end
   local now = os.clock()
   if now < (cooldowns[plr] or 0) or attacks[plr] then
     return
   end
-  cooldowns[plr] = now + delay
-  local data = {character = c, hit = {}, closed = false}
+  cooldowns[plr] = now + cooldown
+  local data = {hit = {}, closed = false}
   attacks[plr] = data
-  local function onHit(t)
-    if data.closed or data.hit[t] then
+  local function onHit(target)
+    if data.closed or data.hit[target] then
       return
     end
-    if not getChar(c) or isStunned(c) then
+    if not getChar(char) or isStunned(char) then
       return
     end
-    local th, tp = getChar(t)
-    if not th or t == c then
+    local targetHum, targetRoot = getChar(target)
+    if not targetHum or target == char then
       return
     end
-    if t:FindFirstChildOfClass("ForceField") then
+    if target:FindFirstChildOfClass("ForceField") then
       return
     end
-    if (tp.Position - p.Position).Magnitude > range then
+    if (targetRoot.Position - root.Position).Magnitude > range then
       return
     end
-    if not canHit(c, t, p.Position, tp.Position) then
+    if not canHit(char, target, root.Position, targetRoot.Position) then
       return
     end
-    data.hit[t] = true
-    local blocking = t:GetAttribute("Blocking") == true
-    dmg.Deal(t, damage, onBlock)
+    data.hit[target] = true
+    local blocking = target:GetAttribute("Blocking") == true
+    damageMod.Deal(target, damage, onBlock)
     if blocking then
       return
     end
-    react(th)
-    playPunch(tp)
-    emitFx(hitfx, tp, 20)
-    emitFx(bloodfx, tp, 20)
+    react(targetHum)
+    playPunch(targetRoot)
+    emitFx(hitfx, targetRoot, 20)
+    emitFx(bloodfx, targetRoot, 20)
   end
 
   local ok, err = xpcall(function()
-    data.lunge = startLunge(p)
-    data.hitbox = hb.new(p.CFrame * offset, c, {size = size})
+    data.lunge = startLunge(root)
+    data.hitbox = hitbox.new(root.CFrame * offset, char, {size = size})
     data.follow = run.Heartbeat:Connect(function()
-      if plr.Character ~= c or not getChar(c) then
+      if plr.Character ~= char or not getChar(char) then
         stopAttack(plr)
         return
       end
-      if p.Anchored or isStunned(c) then
+      if root.Anchored or isStunned(char) then
         stopAttack(plr)
         return
       end
-      data.hitbox:Update(p.CFrame * offset)
+      data.hitbox:Update(root.CFrame * offset)
     end)
     data.hitbox:Start(onHit, onClash)
   end, debug.traceback)
@@ -325,37 +334,45 @@ local function startAttack(plr)
   end)
 end
 
-local function reset(plr, c)
+local function reset(plr, char)
   stopAttack(plr)
   cooldowns[plr] = nil
-  if c and c.Parent then
-    setBlock(c, false)
+  if char and char.Parent then
+    setBlock(char, false)
   end
 end
 
 local function setup(plr)
+  if links[plr] then
+    return
+  end
   local conns = {}
   links[plr] = conns
-  local death
-  local function onSpawn(c)
-    reset(plr, c)
-    if death then
-      death:Disconnect()
-    end
-    local h = c:WaitForChild("Humanoid", 10)
-    if not h or plr.Character ~= c or not plr.Parent then
+  local function onSpawn(char)
+    if plr.Character ~= char or not plr.Parent then
       return
     end
-    death = h.Died:Connect(function()
-      reset(plr, c)
+    reset(plr, char)
+    if deaths[plr] then
+      deaths[plr]:Disconnect()
+    end
+    local hum = char:WaitForChild("Humanoid", 10)
+    if not hum or plr.Character ~= char or not plr.Parent then
+      return
+    end
+    if deaths[plr] then
+      deaths[plr]:Disconnect()
+    end
+    deaths[plr] = hum.Died:Connect(function()
+      reset(plr, char)
     end)
   end
   table.insert(conns, plr.CharacterAdded:Connect(onSpawn))
-  table.insert(conns, plr.CharacterRemoving:Connect(function(c)
-    reset(plr, c)
-    if death then
-      death:Disconnect()
-      death = nil
+  table.insert(conns, plr.CharacterRemoving:Connect(function(char)
+    reset(plr, char)
+    if deaths[plr] then
+      deaths[plr]:Disconnect()
+      deaths[plr] = nil
     end
   end))
   if plr.Character then
@@ -363,30 +380,34 @@ local function setup(plr)
   end
 end
 
-atk.OnServerEvent:Connect(startAttack)
-blk.OnServerEvent:Connect(function(plr)
+attackEvent.OnServerEvent:Connect(startAttack)
+blockEvent.OnServerEvent:Connect(function(plr)
   if not checkRate(plr) then
     return
   end
-  local c = plr.Character
-  if not getChar(c) or isStunned(c) then
+  local char = plr.Character
+  if not getChar(char) or isStunned(char) then
     return
   end
   if attacks[plr] then
     return
   end
-  setBlock(c, true)
+  setBlock(char, true)
 end)
-unblk.OnServerEvent:Connect(function(plr)
-  local c = plr.Character
-  if c and c:GetAttribute("Blocking") then
-    setBlock(c, false)
+unblockEvent.OnServerEvent:Connect(function(plr)
+  local char = plr.Character
+  if char and char:GetAttribute("Blocking") then
+    setBlock(char, false)
   end
 end)
 players.PlayerAdded:Connect(setup)
 players.PlayerRemoving:Connect(function(plr)
   reset(plr, plr.Character)
   rates[plr] = nil
+  if deaths[plr] then
+    deaths[plr]:Disconnect()
+    deaths[plr] = nil
+  end
   for i, conn in ipairs(links[plr] or {}) do
     conn:Disconnect()
   end
